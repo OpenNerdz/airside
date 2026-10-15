@@ -7,11 +7,13 @@ const RAD = Math.PI / 180;
 const PLANE = new Path2D('M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z');
 const STALE = 600; // seconds before a live fix stops counting as live
 
-let land = null;     // decoded rings once loaded
-let landLoad = null; // the pending request
-const loadLand = () => landLoad ??= fetch(new URL('../data/land.json', import.meta.url))
+// Coastlines: 1:110m for whole routes (about 9 KB), 1:50m fetched only for the close-up view.
+const land = { coarse: null, fine: null };
+const loads = {};
+const FILES = { coarse: 'land.json', fine: 'land-50m.json' };
+const loadLand = which => loads[which] ??= fetch(new URL(`../data/${FILES[which]}`, import.meta.url))
   .then(r => r.json())
-  .then(rings => land = rings.map(flat => {
+  .then(rings => land[which] = rings.map(flat => {
     // Rings are delta-encoded tenths of a degree: [lon0, lat0, dlon, dlat, ...].
     const pts = new Float32Array(flat.length);
     for (let i = 0, x = 0, y = 0; i < flat.length; i += 2) {
@@ -20,7 +22,7 @@ const loadLand = () => landLoad ??= fetch(new URL('../data/land.json', import.me
     }
     return pts;
   }))
-  .catch(() => { landLoad = null; });
+  .catch(() => { loads[which] = null; });
 
 // ---------- spherical helpers
 
@@ -110,13 +112,14 @@ export function createMap() {
     if (!b) return;
     mode = b.dataset.zoom;
     for (const x of el.querySelectorAll('[data-zoom]')) x.setAttribute('aria-pressed', x === b);
+    if (mode === 'plane') loadLand('fine').then(() => draw());
     draw();
   });
   const ro = new ResizeObserver(() => draw());
   ro.observe(frame);
   const scheme = matchMedia('(prefers-color-scheme: dark)');
   scheme.addEventListener('change', () => draw());
-  loadLand().then(() => draw());
+  loadLand('coarse').then(() => draw());
 
   function draw() {
     if (!f || !frame.isConnected) return;
@@ -180,11 +183,12 @@ export function createMap() {
     for (let lon = Math.ceil(lonAt(0) / step) * step; lon <= lonAt(w); lon += step) { const x = X((lon - mid.lon) * k); ctx.moveTo(x, 0); ctx.lineTo(x, h); }
     ctx.stroke();
 
-    if (Array.isArray(land)) {
+    const rings = mode === 'plane' ? land.fine ?? land.coarse : land.coarse;
+    if (rings) {
       ctx.fillStyle = c('--land');
       ctx.beginPath();
       const uMin = (0 - w / 2) / s + cu, uMax = (w - w / 2) / s + cu;
-      for (const ring of land) {
+      for (const ring of rings) {
         // Unwrap the ring, then draw whichever 360° copies fall in view.
         const us = new Float32Array(ring.length / 2), vs = new Float32Array(ring.length / 2);
         let prev = mid.lon + wrap(ring[0] - mid.lon), lo = Infinity, hi = -Infinity;
@@ -224,6 +228,7 @@ export function createMap() {
     // Airports
     const label = (p, other, code) => {
       const x = X(p.u), y = Y(p.v);
+      if (x < -10 || x > w + 10 || y < -10 || y > h + 10) return; // off-frame in the close-up
       ctx.beginPath();
       ctx.arc(x, y, 4.5, 0, Math.PI * 2);
       ctx.fillStyle = c('--surface');

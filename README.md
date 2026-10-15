@@ -22,7 +22,7 @@ data. There are no third-party requests other than the data feed.
 ## Live tracking
 
 While a flight is in the air, its route card grows a moving map: land, the planned great-circle
-route, the track actually flown, and the aircraft at its real position and heading, with altitude,
+route, the track actually flown, and the aircraft at its real position (a finer 1:50m coastline loads for the close-up view) and heading, with altitude,
 ground speed, heading or climb rate, and distance to go. Board rows for airborne flights carry an
 aircraft icon. The map code (`js/map.js`) and outline data (`data/land.json`, Natural Earth 1:110m,
 about 9 KB compressed) only load when a map is shown.
