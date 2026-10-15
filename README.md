@@ -1,7 +1,7 @@
 # Airside
 
 Live flight status and airport boards, without ads, trackers or a framework.
-Plain HTML, CSS and ES modules: about 45 KB before fonts, no build step.
+Plain HTML, CSS and ES modules: about 60 KB uncompressed before fonts, no build step.
 
 - `?flight=FR2660` shows one flight: live status, gate, terminal, check-in and belt,
   progress while airborne, every known day for that number, punctuality chart and recent history.
