@@ -7,7 +7,7 @@
 // Normalised flight:
 // { number, callsign, codeshares[], state, divertedTo,
 //   airline: {name, iata, icao}, aircraft: {code, model, reg, hex},
-//   dep: {iata, icao, name, city, country, lat, lon, tz, tzAbbr,
+//   dep: {iata, icao, name, city, country, cc, lat, lon, tz, tzAbbr,
 //         sched, est, actual, terminal, gate, desk},
 //   arr: { ...same, belt instead of desk } }
 // Times are Unix seconds (UTC). state is one of: scheduled, airborne, departed,
@@ -47,6 +47,7 @@ function place(a, info) {
     name: a?.name ?? '',
     city: pos.region?.city || a?.name || '',
     country: pos.country?.name ?? '',
+    cc: pos.country?.code ?? '',
     lat: pos.latitude ?? null,
     lon: pos.longitude ?? null,
     tz: a?.timezone?.name ?? 'UTC',

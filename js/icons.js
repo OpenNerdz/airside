@@ -7,6 +7,9 @@ const paths = {
   cruise: `<path d="${PLANE}" fill="currentColor" transform="rotate(90 12 12)"/>`,
   search: '<circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  bell: '<path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.7 2H4.8l1.7-2z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M10 21h4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  bellOn: '<path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.7 2H4.8l1.7-2z" fill="currentColor" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M10 21h4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  passport: '<rect x="5" y="3" width="14" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="10.5" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 16.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   back: '<path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 

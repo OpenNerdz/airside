@@ -2,10 +2,11 @@ import * as src from './fr24.js';
 import { hm, dayKey, dayLabel, shortDay, longDate, dur, rel, lateness, offsetMin, distanceKm, num, nowS } from './format.js';
 import { icon } from './icons.js';
 import { fetchLive } from './adsb.js';
+import { LATE, esc, clean, store, toneOf, statusOf, airborne, isFinal, arrEstimate, borderNote, pick, fetchFlight, readSnap } from './flight.js';
+import * as watch from './watch.js';
 
 const view = document.getElementById('view');
 const topSearch = document.getElementById('top-search');
-const LATE = 15 * 60; // arrival within 15 minutes of schedule counts as on time
 const FLIGHT_REFRESH = 60_000;
 const BOARD_REFRESH = 120_000;
 const LIVE_REFRESH = 15_000;   // aircraft position while the map is on screen
@@ -16,14 +17,7 @@ let timer = 0;
 let liveTimer = 0;
 let pending = null;
 
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const clean = s => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const viewerTime = () => new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-
-const store = {
-  get(k, d) { try { return JSON.parse(localStorage.getItem('airside:' + k)) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('airside:' + k, JSON.stringify(v)); } catch { /* private mode */ } },
-};
 
 // ---------- navigation
 
@@ -82,49 +76,6 @@ addEventListener('popstate', route);
 
 // ---------- status
 
-const toneOf = d => d == null ? 'idle' : d < LATE ? 'ok' : d < 3600 ? 'warn' : 'bad';
-
-function statusOf(f) {
-  const now = nowS();
-  const depBest = f.dep.actual ?? f.dep.est;
-  const arrBest = f.arr.actual ?? f.arr.est;
-  const depDelay = depBest && f.dep.sched ? depBest - f.dep.sched : null;
-  const arrDelay = arrBest && f.arr.sched ? arrBest - f.arr.sched : null;
-  const airline = f.airline?.name ?? 'the airline';
-
-  switch (f.state) {
-    case 'canceled':
-      return { tone: 'bad', label: 'Cancelled', detail: `Contact ${esc(airline)} about rebooking or a refund.` };
-    case 'diverted':
-      return { tone: 'bad', label: f.divertedTo ? `Diverted to ${esc(f.divertedTo)}` : 'Diverted', detail: `The flight did not land at ${esc(f.arr.city)}.` };
-    case 'landed':
-      return {
-        tone: toneOf(arrDelay), label: 'Landed', note: lateness(arrDelay),
-        detail: `Landed at ${hm(f.arr.actual, f.arr.tz)} local time, ${rel(f.arr.actual)}.`,
-      };
-    case 'airborne':
-    case 'departed':
-      return {
-        tone: toneOf(arrDelay ?? depDelay), label: 'In the air', note: arrDelay != null ? `Arriving ${lateness(arrDelay)}` : '',
-        detail: `Departed at ${hm(f.dep.actual, f.dep.tz)}.` + (arrBest ? ` Lands at ${hm(arrBest, f.arr.tz)} local time, ${rel(arrBest)}.` : ''),
-      };
-  }
-  if (!depBest && f.dep.sched < now - 3 * 3600) {
-    return { tone: 'idle', label: 'No live data', detail: 'The data source has no record of this flight departing.' };
-  }
-  if (depDelay != null && depDelay >= LATE) {
-    return {
-      tone: toneOf(depDelay), label: 'Delayed', note: lateness(depDelay),
-      detail: `Now expected to leave at ${hm(depBest, f.dep.tz)} local time, ${rel(depBest)}.`,
-    };
-  }
-  return {
-    tone: depBest ? 'ok' : 'idle',
-    label: depBest ? 'On time' : 'Scheduled',
-    detail: `Departs at ${hm(depBest ?? f.dep.sched, f.dep.tz)} local time, ${rel(depBest ?? f.dep.sched)}.`,
-  };
-}
-
 // Short status for one row of an airport board.
 function rowStatus(f, mode) {
   const dep = mode === 'departures';
@@ -145,12 +96,9 @@ function rowStatus(f, mode) {
   return { ...s, text: s.label };
 }
 
-const airborne = f => f.state === 'airborne' || f.state === 'departed';
+// ---------- home: my flights
 
-const isFinal = f => f.state === 'canceled' || f.state === 'diverted' ||
-  (f.state === 'landed' && f.arr.actual < nowS() - 1800) || f.dep.sched < nowS() - 86400;
-
-// ---------- home: search + airport board
+const MY_MAX = 4; // live cards on the home page; each costs a request or three
 
 function remember(f) {
   const list = store.get('recent', []).filter(r => r.n !== f.number);
@@ -158,18 +106,68 @@ function remember(f) {
   store.set('recent', list.slice(0, 6));
 }
 
-function recentHTML() {
-  const list = store.get('recent', []);
-  const items = list.length ? list : [{ n: 'FR2660', r: 'Example' }];
-  return `<div class="chips" aria-label="${list.length ? 'Recent flights' : 'Example flight'}">
-    ${items.map(r => `<a class="chip" href="?flight=${esc(r.n)}" data-nav><b>${esc(r.n)}</b><span>${esc(r.r)}</span></a>`).join('')}
-  </div>`;
+function myFlightsHTML() {
+  const list = store.get('recent', []).slice(0, MY_MAX);
+  if (!list.length) {
+    return `<div class="chips" aria-label="Example flight"><a class="chip" href="?flight=FR2660" data-nav><b>FR2660</b><span>Example</span></a></div>`;
+  }
+  return `<section class="mine" aria-labelledby="mine-title">
+    <h2 id="mine-title" class="mine-title">My flights</h2>
+    <ul class="mine-list">${list.map(r => {
+      const snap = readSnap(r.n);
+      return `<li data-n="${esc(r.n)}">${cardHTML(r, snap ? pick(snap.flights) : null)}</li>`;
+    }).join('')}</ul>
+  </section>`;
 }
+
+// One live card: what you'd glance at a departure screen for.
+function cardHTML(r, f) {
+  const forget = `<button class="mf-x" type="button" data-forget="${esc(r.n)}" aria-label="Remove ${esc(r.n)} from My flights">×</button>`;
+  if (!f) {
+    return `<a class="mf" href="?flight=${esc(r.n)}" data-nav><span class="mf-num">${esc(r.n)}</span>
+      <span class="mf-main"><b>${esc(r.r)}</b><small>Checking…</small></span><span class="mf-side"></span></a>${forget}`;
+  }
+  const s = statusOf(f);
+  const day = dayLabel(f.dep.sched, f.dep.tz);
+  const line = f.state === 'landed' ? `${day} · landed ${hm(f.arr.actual, f.arr.tz)}`
+    : airborne(f) ? `In the air · lands ${hm(f.arr.est ?? f.arr.sched, f.arr.tz)}`
+    : f.state === 'canceled' ? `${day} · was ${hm(f.dep.sched, f.dep.tz)}`
+    : `${day} · departs ${hm(f.dep.est ?? f.dep.sched, f.dep.tz)}`;
+  const box = f.state === 'landed' ? f.arr.belt : airborne(f) ? null : f.dep.gate;
+  const bell = watch.watchedNumbers().has(f.number) ? icon('bellOn', 'i mf-bell') : '';
+  return `<a class="mf tone-${s.tone}" href="${flightUrl(f)}" data-nav>
+      <span class="mf-num">${esc(f.number)}</span>
+      <span class="mf-main"><b>${esc(f.dep.iata)} → ${esc(f.arr.iata)}</b><small>${esc(line)}</small></span>
+      <span class="mf-side"><span class="mf-status">${bell}<span class="dot"></span>${s.label}</span>${box ? `<span class="mini-plate" title="${f.state === 'landed' ? 'Bag belt' : 'Gate'}">${esc(box)}</span>` : ''}</span>
+    </a>${forget}`;
+}
+
+async function loadCards(my, fresh) {
+  const items = [...view.querySelectorAll('.mine-list li')];
+  await Promise.all(items.map(async li => {
+    const n = li.dataset.n;
+    const r = store.get('recent', []).find(x => x.n === n) ?? { n, r: '' };
+    try {
+      const { f } = await fetchFlight(n, { fresh, gateHours: 12 });
+      if (my === token && f && li.isConnected) li.innerHTML = cardHTML(r, f);
+    } catch { /* offline: the saved copy stays */ }
+  }));
+}
+
+view.addEventListener('click', e => {
+  const x = e.target.closest('[data-forget]');
+  if (!x) return;
+  store.set('recent', store.get('recent', []).filter(r => r.n !== x.dataset.forget));
+  const list = x.closest('.mine-list');
+  x.closest('li').remove();
+  if (list && !list.children.length) list.closest('.mine').outerHTML = myFlightsHTML();
+});
+
+// ---------- home: search + airport board
 
 function homeView(iata, mode) {
   const my = token;
   document.title = 'Airside';
-  const other = mode === 'departures' ? 'arrivals' : 'departures';
   view.innerHTML = `
     <section class="hero">
       <h1 class="hero-title">Where’s my flight?</h1>
@@ -179,7 +177,7 @@ function homeView(iata, mode) {
         <input id="q-home" name="q" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="search" placeholder="Flight number">
         <button>Track</button>
       </form>
-      ${recentHTML()}
+      ${myFlightsHTML()}
     </section>
     <section class="board" aria-labelledby="board-title">
       <div class="board-head">
@@ -223,6 +221,7 @@ function homeView(iata, mode) {
   filter.addEventListener('input', applyFilter);
 
   const load = async (fresh) => {
+    loadCards(my, fresh);
     let results;
     const from = nowS() - 45 * 60; // keep the last few departed flights in view
     try {
@@ -299,18 +298,9 @@ function problemHTML(e, retry = true) {
 
 const flightUrl = (f, flights) => {
   const date = dayKey(f.dep.sched, f.dep.tz);
-  const legs = flights?.filter(g => dayKey(g.dep.sched, g.dep.tz) === date).length ?? 1;
+  const legs = flights?.filter(g => dayKey(g.dep.sched, g.dep.tz) === date).length ?? 2; // unknown: be explicit
   return `?flight=${encodeURIComponent(f.number)}&date=${date}${legs > 1 ? `&from=${f.dep.iata}` : ''}`;
 };
-
-function pick(flights, date, from) {
-  if (date) {
-    const m = flights.find(f => dayKey(f.dep.sched, f.dep.tz) === date && (!from || f.dep.iata === from));
-    if (m) return m;
-  }
-  const now = nowS();
-  return flights.find(f => (f.arr.actual ?? f.arr.est ?? f.arr.sched ?? f.dep.sched) > now - 3 * 3600) ?? flights.at(-1);
-}
 
 function flightView(number, date, from) {
   const my = token;
@@ -319,6 +309,7 @@ function flightView(number, date, from) {
   view.innerHTML = `<div class="loading-flight"><p class="plate-num">${esc(number)}</p><p>Finding ${esc(number)}…</p></div>`;
   let shown = false;
   let current = null;            // the flight on screen
+  let last = null;               // { flights, f, meta } as last rendered
   let map = null, mapLib = null; // moving map, loaded on first need
   const live = { pos: null, trail: null, at: 0, trailAt: 0 };
 
@@ -361,43 +352,46 @@ function flightView(number, date, from) {
     if (fresh) { clearTimeout(liveTimer); tick(); }
   };
 
+  const adopt = f => {
+    if (current && (current.number !== f.number || current.dep.sched !== f.dep.sched)) Object.assign(live, { pos: null, trail: null, at: 0, trailAt: 0 });
+    current = f;
+  };
+
   const load = async (fresh) => {
-    let flights;
+    let r;
     try {
-      flights = await src.findFlight(number, { fresh });
+      r = await fetchFlight(number, {
+        date, from, fresh,
+        onList: (flights, f) => { if (my === token) { adopt(f); render(flights, f, { at: Date.now() }); } },
+      });
     } catch (e) {
       if (my !== token) return;
-      if (!shown) view.innerHTML = `<div class="loading-flight"><p class="plate-num">${esc(number)}</p>${problemHTML(e)}</div>`;
+      // No signal: keep showing what we last knew, and say how old it is.
+      if (last) render(last.flights, last.f, { ...last.meta, offline: true });
+      else view.innerHTML = `<div class="loading-flight"><p class="plate-num">${esc(number)}</p>${problemHTML(e)}</div>`;
       later(() => load(true), FLIGHT_REFRESH);
       return;
     }
     if (my !== token) return;
-    if (!flights.length) {
+    if (!r.f) {
       view.innerHTML = `<div class="loading-flight"><p class="plate-num">${esc(number)}</p>
         <div class="problem"><p><b>No flight found for ${esc(number)}.</b></p>
         <p>Check the number on your booking: it is the airline’s two-letter code and up to four digits, like FR2660 or U22014.</p></div></div>`;
       return;
     }
-    const f = pick(flights, date, from);
-    if (current && (current.number !== f.number || current.dep.sched !== f.dep.sched)) Object.assign(live, { pos: null, trail: null, at: 0, trailAt: 0 });
-    current = f;
-    render(flights, f);
-    remember(f);
-    if (Math.abs(f.dep.sched - nowS()) < 36 * 3600) {
-      try {
-        merge(f, await src.gateInfo(f, { fresh }));
-        if (my === token) render(flights, f);
-      } catch { /* gates are a bonus */ }
-    }
-    if (my !== token) return;
-    later(() => load(true), isFinal(f) ? 15 * 60_000 : FLIGHT_REFRESH);
+    adopt(r.f);
+    render(r.flights, r.f, { at: Date.now() });
+    remember(r.f);
+    watch.observe(r.f);
+    later(() => load(true), isFinal(r.f) ? 15 * 60_000 : FLIGHT_REFRESH);
   };
 
-  const render = (flights, f) => {
+  const render = (flights, f, meta) => {
     shown = true;
+    last = { flights, f, meta };
     const scroller = view.querySelector('.days');
     const keep = scroller?.scrollLeft;
-    view.innerHTML = flightHTML(flights, f);
+    view.innerHTML = flightHTML(flights, f, meta);
     document.title = `${f.number} · ${statusOf(f).label.replace(/&amp;/g, '&')} · Airside`;
     const days = view.querySelector('.days');
     const on = days?.querySelector('[aria-current]');
@@ -405,16 +399,21 @@ function flightView(number, date, from) {
     mountMap();
   };
 
-  load(false);
-}
+  // Alerts button: re-render in place so the button and the note update.
+  view.onclick = async e => {
+    if (!e.target.closest('#watch') || !current || !last) return;
+    await watch.toggle(current);
+    if (my === token) render(last.flights, last.f, last.meta);
+  };
 
-function merge(f, info) {
-  for (const side of ['dep', 'arr']) {
-    for (const [k, v] of Object.entries(info?.[side] ?? {})) if (v) f[side][k] = v;
+  // A saved copy shows instantly (and is all there is without signal).
+  const snap = readSnap(number);
+  if (snap) {
+    const f = pick(snap.flights, date, from);
+    adopt(f);
+    render(snap.flights, f, { at: snap.at, saved: true });
   }
-  for (const [k, v] of Object.entries(info?.aircraft ?? {})) if (v && !f.aircraft[k]) f.aircraft[k] = v;
-  f.callsign ||= info?.callsign ?? '';
-  f.airline ??= info?.airline ?? null;
+  load(false);
 }
 
 // Phones get the system share sheet; elsewhere the link goes to the clipboard.
@@ -437,9 +436,17 @@ view.addEventListener('click', async e => {
   setTimeout(() => { if (btn.isConnected) btn.lastChild.textContent = ' Copy link'; }, 2400);
 });
 
-function flightHTML(flights, f) {
+function flightHTML(flights, f, meta = {}) {
   const s = statusOf(f);
+  const at = new Date(meta.at ?? Date.now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const watching = watch.isWatched(f);
+  const perm = watch.notifyPermission();
+  const ago = meta.at && Date.now() - meta.at > 60_000 ? rel(meta.at / 1000) : 'a moment ago';
+  const updated = meta.offline ? `last updated ${at}`
+    : meta.saved ? `saved copy from ${at}, updating…`
+    : `updated ${at}${isFinal(f) ? '' : ' · refreshes every minute'}`;
   return `
+    ${meta.offline ? `<p class="offline" role="status"><b>No connection.</b> Showing what Airside last saw at ${at} (${ago}). It updates by itself when you're back online.</p>` : ''}
     <nav class="crumbs"><a href="?airport=${esc(f.dep.iata)}&board=departures" data-nav>${icon('back')}${esc(f.dep.city || f.dep.iata)} departures</a></nav>
     <header class="fl-head">
       <p class="plate-num">${esc(f.number)}</p>
@@ -447,13 +454,18 @@ function flightHTML(flights, f) {
         <h1>${esc(f.dep.city)} to ${esc(f.arr.city)}</h1>
         <p class="sub">${esc(f.airline?.name ?? '')}</p>
       </div>
-      <button class="ghost" id="copy" type="button">${icon('link')}<span> ${canShare ? 'Share' : 'Copy link'}</span></button>
+      <div class="fl-actions">
+        ${isFinal(f) ? '' : `<button class="ghost watch-btn" id="watch" type="button" aria-pressed="${watching}">${icon(watching ? 'bellOn' : 'bell')}<span>${watching ? 'Alerts on' : 'Alert me'}</span></button>`}
+        <button class="ghost" id="copy" type="button">${icon('link')}<span> ${canShare ? 'Share' : 'Copy link'}</span></button>
+      </div>
     </header>
     ${daysHTML(flights, f)}
     <section class="status tone-${s.tone}" aria-live="polite">
       <p class="status-main"><span class="dot"></span><strong>${s.label}</strong>${s.note ? `<span class="status-note">${esc(s.note)}</span>` : ''}</p>
       <p class="status-detail">${s.detail}</p>
-      <p class="status-meta">${longDate(f.dep.sched, f.dep.tz)} · updated ${viewerTime()}${isFinal(f) ? '' : ' · refreshes every minute'}</p>
+      <p class="status-meta">${longDate(f.dep.sched, f.dep.tz)} · ${updated}</p>
+      ${watching ? `<p class="status-meta alert-note">${icon('bellOn')}You'll get an alert when the gate appears or changes, the time moves, and at take-off and landing, while Airside is open${
+        perm === 'denied' ? '. Notifications are blocked for this site in your browser settings, so alerts only show on this page' : perm === 'unsupported' ? '. This browser can only show them on this page' : ''}.</p>` : ''}
     </section>
     <section class="route" aria-label="Route">
       <div class="route-bar">
@@ -499,20 +511,23 @@ const plate = (label, v) => `<div class="plate${v ? '' : ' is-empty'}"><span>${l
 function endHTML(f, side) {
   const a = f[side];
   const dep = side === 'dep';
-  const best = a.actual ?? a.est;
+  const guess = dep ? null : arrEstimate(f); // before take-off: carried over from the departure delay
+  const best = a.actual ?? a.est ?? guess;
   const moved = best && a.sched && Math.abs(best - a.sched) >= 60;
   const tone = best ? toneOf(best - a.sched) : 'idle';
   const gateLabel = a.gate && /^[A-Z]$/.test(a.gate) ? 'Gate area' : 'Gate';
+  const note = borderNote(f, side);
   return `<div class="end">
     <p class="end-label">${icon(dep ? 'departure' : 'arrival')}${dep ? 'Departure' : 'Arrival'} · ${esc(a.name || a.iata)}</p>
     <dl class="times">
       <div><dt>Scheduled</dt><dd${moved ? ' class="was"' : ''}>${hm(a.sched, a.tz)}</dd></div>
-      <div><dt>${a.actual ? (dep ? 'Departed' : 'Landed') : 'Expected'}</dt><dd class="t-${best ? tone : 'idle'}">${best ? hm(best, a.tz) : '–'}</dd></div>
+      <div><dt>${a.actual ? (dep ? 'Departed' : 'Landed') : 'Expected'}</dt><dd class="t-${best ? tone : 'idle'}">${best ? `${guess && best === guess ? '≈\u2009' : ''}${hm(best, a.tz)}` : '–'}</dd></div>
     </dl>
-    <p class="tz">Local time (${esc(a.tzAbbr || a.tz)}), ${longDate(a.sched, a.tz)}</p>
+    <p class="tz">Local time (${esc(a.tzAbbr || a.tz)}), ${longDate(a.sched, a.tz)}${guess && best === guess ? '. Estimated from the departure time until the plane takes off.' : ''}</p>
     <div class="plates">
       ${plate('Terminal', a.terminal)}${plate(gateLabel, a.gate)}${dep ? plate('Check-in', a.desk) : plate('Bag belt', a.belt)}
     </div>
+    ${note ? `<p class="hint">${icon('passport')}${note}</p>` : ''}
   </div>`;
 }
 
@@ -627,5 +642,9 @@ function detailsHTML(flights, f) {
   return fold('details', 'Flight details', hint, `<dl class="kv">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
     <p class="source">Live data from Flightradar24, last checked at ${viewerTime()}.</p>`);
 }
+
+// Offline support and alert notifications.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { /* file:// or blocked */ });
+watch.startWatcher();
 
 route();

@@ -19,6 +19,22 @@ data. There are no third-party requests other than the data feed.
 - `?airport=ALC&board=departures` (or `arrivals`) shows a live airport board with a filter.
 - All times are shown in each airport's local time zone.
 
+## For the day you travel
+
+- **My flights:** flights you've looked up appear on the home page as live cards (status, time and
+  gate or bag belt). Up to four, each removable.
+- **Alerts:** "Alert me" on a flight page watches it for a gate appearing or changing, a new
+  departure time, take-off, landing, cancellation or diversion, and the bag belt. Alerts show on the
+  page and as phone notifications (through the service worker), checked every minute while Airside
+  is open. There's no push server, so a fully closed browser gets nothing.
+- **No signal:** `sw.js` keeps the site's own files so it opens offline, and each flight's last data
+  is kept on the phone (`airside:snap:*` in localStorage). Without a connection the page shows that
+  copy and says how old it is.
+- **Arrival estimate:** before take-off the arrival time is shown as "≈ 09:19", carried over from the
+  departure delay, until the source has a real estimate.
+- **Passport control:** each side of a flight notes border checks, worked out from the two
+  countries (Schengen area and the UK–Ireland Common Travel Area).
+
 ## Live tracking
 
 While a flight is in the air, its route card grows a moving map: land, the planned great-circle
