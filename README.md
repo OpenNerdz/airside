@@ -1,6 +1,8 @@
 # Airside
 
 Live flight status and airport boards, without ads, trackers or a framework.
+Live at https://opennerdz.github.io/airside/ (GitHub Pages, deployed from `main`).
+
 Plain HTML, CSS and ES modules: about 60 KB uncompressed before fonts, no build step.
 
 - `?flight=FR2660` shows one flight: live status, gate, terminal, check-in and belt,
