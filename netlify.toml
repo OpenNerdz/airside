@@ -1,0 +1,5 @@
+# Netlify hosts only the live-position API (netlify/functions/live.mjs).
+# The site itself is served by GitHub Pages from the repo root.
+[build]
+  publish = "netlify/public"
+  functions = "netlify/functions"

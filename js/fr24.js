@@ -6,7 +6,7 @@
 //
 // Normalised flight:
 // { number, callsign, codeshares[], state, divertedTo,
-//   airline: {name, iata, icao}, aircraft: {code, model, reg},
+//   airline: {name, iata, icao}, aircraft: {code, model, reg, hex},
 //   dep: {iata, icao, name, city, country, lat, lon, tz, tzAbbr,
 //         sched, est, actual, terminal, gate, desk},
 //   arr: { ...same, belt instead of desk } }
@@ -101,6 +101,7 @@ function normalise(f, here) {
       code: f.aircraft?.model?.code ?? '',
       model: f.aircraft?.model?.text ?? '',
       reg: f.aircraft?.registration ?? '',
+      hex: f.aircraft?.hex ?? '',
     },
     dep, arr,
   };
@@ -163,5 +164,6 @@ export async function gateInfo(f, opts) {
     arr: ar ? { terminal: ar.arr.terminal, gate: ar.arr.gate, belt: ar.arr.belt } : null,
     aircraft: (dr ?? ar)?.aircraft ?? null,
     airline: (dr ?? ar)?.airline ?? null,
+    callsign: (dr ?? ar)?.callsign ?? '',
   };
 }

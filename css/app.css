@@ -18,6 +18,10 @@
   --bad: #c42b2b;  --bad-bg: #fbe4e3;
   --idle: #5f6b7a; --idle-bg: #e6eaef;
   --shadow: 0 1px 2px rgb(15 22 32 / .05), 0 6px 20px rgb(15 22 32 / .05);
+  --sea: #dde6ef;
+  --land: #f6f8fa;
+  --grid: rgb(15 22 32 / .06);
+  --halo: rgb(255 198 41 / .55);
 
   --f-sign: "Barlow Semi Condensed", "Roboto Condensed", "Arial Narrow", sans-serif;
   --f-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -40,6 +44,10 @@
     --bad: #ff7a73;  --bad-bg: rgb(255 122 115 / .14);
     --idle: #a3aebb; --idle-bg: rgb(152 164 178 / .13);
     --shadow: none;
+    --sea: #0d1319;
+    --land: #1f2833;
+    --grid: rgb(231 236 242 / .05);
+    --halo: rgb(255 198 41 / .32);
     color-scheme: dark;
   }
 }
@@ -415,6 +423,68 @@ a.row:hover { background: color-mix(in srgb, var(--sign) 10%, var(--surface)); }
 }
 .track-meta { margin: 0; color: var(--muted); font-size: .85rem; text-align: center; font-variant-numeric: tabular-nums; }
 
+/* Moving map: sits inside the route card while the flight is in the air. */
+.map-slot { border-top: 1px solid var(--line); }
+.map-frame { position: relative; height: clamp(260px, 62vw, 400px); background: var(--sea); }
+.map-frame canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.map-chip {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: .8rem;
+  font-weight: 700;
+  --tone: var(--idle);
+}
+.map-chip.is-live { --tone: var(--ok); }
+.map-chip.is-live .dot { animation: beacon 2s ease-in-out infinite; }
+@keyframes beacon { 50% { opacity: .25; } }
+.map-zoom {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.map-zoom button { padding: 5px 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: .8rem; font-weight: 500; }
+.map-zoom button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.map-credit {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  margin: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--muted);
+  font-size: .66rem;
+}
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 0;
+  padding: 14px 20px 16px;
+  border-top: 1px solid var(--line);
+}
+.readout > div { flex: 1 1 7.4rem; min-width: 0; }
+.readout dt { color: var(--muted); font-size: .76rem; }
+.readout dd { margin: 1px 0 0; font: 600 1.3rem/1.15 var(--f-sign); font-variant-numeric: tabular-nums; }
+.readout small { color: var(--muted); font: 400 .78rem var(--f-body); }
+.readout .note { flex-basis: 100%; margin: 0; color: var(--muted); font-size: .82rem; max-width: 65ch; }
+.r-live { width: 1rem; height: 1rem; color: var(--tone); }
+
 .ends { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
 .end { min-width: 0; padding: 18px 20px 20px; }
 .end + .end { border-left: 1px solid var(--line); }
@@ -586,6 +656,7 @@ a.row:hover { background: color-mix(in srgb, var(--sign) 10%, var(--surface)); }
   .table-wrap { margin-inline: -16px; }
   .stats b { font-size: 1.8rem; }
   .route-bar { padding-inline: 16px; }
+  .readout { padding-inline: 16px; }
   .end { padding-inline: 16px; }
 }
 

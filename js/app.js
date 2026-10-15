@@ -1,15 +1,19 @@
 import * as src from './fr24.js';
 import { hm, dayKey, dayLabel, shortDay, longDate, dur, rel, lateness, offsetMin, distanceKm, num, nowS } from './format.js';
 import { icon } from './icons.js';
+import { fetchLive } from './adsb.js';
 
 const view = document.getElementById('view');
 const topSearch = document.getElementById('top-search');
 const LATE = 15 * 60; // arrival within 15 minutes of schedule counts as on time
 const FLIGHT_REFRESH = 60_000;
 const BOARD_REFRESH = 120_000;
+const LIVE_REFRESH = 15_000;   // aircraft position while the map is on screen
+const TRAIL_REFRESH = 300_000; // full flown track, between position updates we extend it locally
 
 let token = 0;     // bumps on every navigation so stale responses are dropped
 let timer = 0;
+let liveTimer = 0;
 let pending = null;
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -31,6 +35,7 @@ function go(url, { replace = false } = {}) {
 
 function route() {
   clearTimeout(timer);
+  clearTimeout(liveTimer);
   pending = null;
   token++;
   const q = new URLSearchParams(location.search);
@@ -133,12 +138,14 @@ function rowStatus(f, mode) {
     case 'airborne':
     case 'departed':
       return dep ? { ...s, text: `Departed ${hm(f.dep.actual, f.dep.tz)}`, past: true }
-                 : { ...s, text: f.arr.est ? `Expected ${hm(f.arr.est, f.arr.tz)}` : 'In the air' };
+                 : { ...s, text: 'In the air' }; // the time column already shows the new arrival time
   }
   // The time column already shows the new departure time; say how late in words.
   if (s.label === 'Delayed') return { ...s, text: `Delayed ${dur(f.dep.est - f.dep.sched)}` };
   return { ...s, text: s.label };
 }
+
+const airborne = f => f.state === 'airborne' || f.state === 'departed';
 
 const isFinal = f => f.state === 'canceled' || f.state === 'diverted' ||
   (f.state === 'landed' && f.arr.actual < nowS() - 1800) || f.dep.sched < nowS() - 86400;
@@ -273,7 +280,7 @@ function rowHTML(f, mode) {
     <span class="r-place"><b>${esc(there.city || there.name)}</b> <span class="code-sm">${esc(there.iata)}</span></span>
     <span class="r-flight"><b>${esc(f.number)}</b> ${esc(f.airline?.name ?? '')}</span>
     <span class="r-gate">${gate ? `<span class="mini-plate" title="${dep ? 'Gate' : 'Baggage belt'}">${esc(gate)}</span>` : ''}</span>
-    <span class="r-status"><span class="dot"></span>${esc(s.text)}</span>
+    <span class="r-status">${airborne(f) ? icon('cruise', 'i r-live') : '<span class="dot"></span>'}${esc(s.text)}</span>
   </a>`;
 }
 
@@ -311,6 +318,48 @@ function flightView(number, date, from) {
   topSearch.elements.q.value = number;
   view.innerHTML = `<div class="loading-flight"><p class="plate-num">${esc(number)}</p><p>Finding ${esc(number)}…</p></div>`;
   let shown = false;
+  let current = null;            // the flight on screen
+  let map = null, mapLib = null; // moving map, loaded on first need
+  const live = { pos: null, trail: null, at: 0, trailAt: 0 };
+
+  // Position polling runs on its own 15 s clock while the flight is in the air.
+  const tick = async () => {
+    if (my !== token || !current || !airborne(current)) return;
+    if (!document.hidden) {
+      const wantTrail = Date.now() - live.trailAt > TRAIL_REFRESH;
+      try {
+        const r = await fetchLive(current, { trail: wantTrail });
+        if (my !== token) return;
+        if (r.pos) {
+          live.pos = r.pos;
+          live.at = Date.now();
+          if (wantTrail && r.trail) { live.trail = r.trail; live.trailAt = Date.now(); }
+          else if (live.trail) live.trail.push([r.pos.lat, r.pos.lon, r.pos.alt]);
+        }
+      } catch { /* keep the last fix; the map falls back to an estimate when it goes stale */ }
+      showLive();
+    }
+    liveTimer = setTimeout(tick, LIVE_REFRESH);
+  };
+
+  const showLive = () => {
+    if (!mapLib || !current) return;
+    map?.update(current, live);
+    const track = view.querySelector('.route .track');
+    if (track) track.style.setProperty('--p', mapLib.flownShare(current, live).toFixed(3));
+  };
+
+  const mountMap = async () => {
+    const slot = view.querySelector('.map-slot');
+    if (!slot) { map?.destroy(); map = null; return; }
+    mapLib ??= await import('./map.js');
+    if (my !== token) return;
+    const fresh = !map;
+    map ??= mapLib.createMap();
+    map.attach(view.querySelector('.map-slot') ?? slot);
+    showLive();
+    if (fresh) { clearTimeout(liveTimer); tick(); }
+  };
 
   const load = async (fresh) => {
     let flights;
@@ -330,6 +379,8 @@ function flightView(number, date, from) {
       return;
     }
     const f = pick(flights, date, from);
+    if (current && (current.number !== f.number || current.dep.sched !== f.dep.sched)) Object.assign(live, { pos: null, trail: null, at: 0, trailAt: 0 });
+    current = f;
     render(flights, f);
     remember(f);
     if (Math.abs(f.dep.sched - nowS()) < 36 * 3600) {
@@ -351,6 +402,7 @@ function flightView(number, date, from) {
     const days = view.querySelector('.days');
     const on = days?.querySelector('[aria-current]');
     if (days && on) days.scrollLeft = keep ?? on.offsetLeft - days.clientWidth / 2 + on.clientWidth / 2;
+    mountMap();
   };
 
   load(false);
@@ -360,7 +412,8 @@ function merge(f, info) {
   for (const side of ['dep', 'arr']) {
     for (const [k, v] of Object.entries(info?.[side] ?? {})) if (v) f[side][k] = v;
   }
-  if (info?.aircraft?.reg && !f.aircraft.reg) f.aircraft = { ...f.aircraft, ...info.aircraft };
+  for (const [k, v] of Object.entries(info?.aircraft ?? {})) if (v && !f.aircraft[k]) f.aircraft[k] = v;
+  f.callsign ||= info?.callsign ?? '';
   f.airline ??= info?.airline ?? null;
 }
 
@@ -408,6 +461,7 @@ function flightHTML(flights, f) {
         ${trackHTML(f)}
         <p class="rb-end rb-arr"><span class="code">${esc(f.arr.iata)}</span><span class="city">${esc(f.arr.city)}</span></p>
       </div>
+      ${airborne(f) ? '<div class="map-slot"></div>' : ''}
       <div class="ends">${endHTML(f, 'dep')}${endHTML(f, 'arr')}</div>
     </section>
     ${recordHTML(flights)}

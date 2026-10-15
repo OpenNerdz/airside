@@ -19,6 +19,23 @@ data. There are no third-party requests other than the data feed.
 - `?airport=ALC&board=departures` (or `arrivals`) shows a live airport board with a filter.
 - All times are shown in each airport's local time zone.
 
+## Live tracking
+
+While a flight is in the air, its route card grows a moving map: land, the planned great-circle
+route, the track actually flown, and the aircraft at its real position and heading, with altitude,
+ground speed, heading or climb rate, and distance to go. Board rows for airborne flights carry an
+aircraft icon. The map code (`js/map.js`) and outline data (`data/land.json`, Natural Earth 1:110m,
+about 9 KB compressed) only load when a map is shown.
+
+Positions come from [adsb.lol](https://adsb.lol), an open ADS-B network (ODbL). adsb.lol doesn't let
+browsers call it directly, so `netlify/functions/live.mjs` relays a trimmed reply (position plus a
+decimated track, about 3 KB) from https://airside-live.netlify.app/api/live. The relay only answers
+this site's origins and its replies are CDN-cached for a few seconds, so many viewers of one flight
+cost one upstream call. Where there's no coverage (mid-ocean, parts of Asia and Africa) the map shows
+an estimated position from the take-off time and the arrival estimate, and says so.
+
+Deploy the relay with `./nl deploy --prod --no-build --dir netlify/public --functions netlify/functions`.
+
 ## Run it
 
 ```sh
