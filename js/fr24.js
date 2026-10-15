@@ -123,23 +123,24 @@ export async function findFlight(number, opts) {
 }
 
 // One page of an airport's departures or arrivals, starting at `from` (Unix s).
-export async function board(iata, mode, { from, page = 1, limit = 100, fresh } = {}) {
+// `details` adds the airport's own name and timezone (about 5 KB); skip it when only rows are needed.
+export async function board(iata, mode, { from, page = 1, limit = 40, details = true, fresh } = {}) {
   const q = new URLSearchParams({ code: iata.toLowerCase(), page, limit });
-  q.append('plugin[]', 'details');
+  if (details) q.append('plugin[]', 'details');
   q.append('plugin[]', 'schedule');
   q.set('plugin-setting[schedule][mode]', mode);
   if (from) q.set('plugin-setting[schedule][timestamp]', Math.floor(from));
   const json = await getJSON(`${BASE}/airport.json?${q}`, { fresh });
   const data = json?.result?.response?.airport?.pluginData;
   const det = data?.details;
-  if (!det?.code) return null;
-  const here = { raw: { name: det.name, code: det.code, position: det.position, timezone: det.timezone } };
+  if (details && !det?.code) return null;
+  const here = det?.code ? { raw: { name: det.name, code: det.code, position: det.position, timezone: det.timezone } } : null;
   const sched = data.schedule?.[mode] ?? {};
   const rows = (sched.data ?? [])
     .map(x => normalise(x.flight, here))
     .filter(f => f.number && f.dep.sched);
   return {
-    airport: place(here.raw),
+    airport: here ? place(here.raw) : null,
     rows,
     page: sched.page?.current ?? page,
     pages: sched.page?.total ?? page,
@@ -152,8 +153,8 @@ export async function gateInfo(f, opts) {
     (r.number === f.number || r.codeshares.includes(f.number)) &&
     Math.abs(r[key].sched - f[key].sched) < 3 * 3600);
   const [d, a] = await Promise.allSettled([
-    f.dep.iata && board(f.dep.iata, 'departures', { from: f.dep.sched - 60, limit: 25, ...opts }),
-    f.arr.iata && board(f.arr.iata, 'arrivals', { from: f.arr.sched - 60, limit: 25, ...opts }),
+    f.dep.iata && board(f.dep.iata, 'departures', { from: f.dep.sched - 60, limit: 25, details: false, ...opts }),
+    f.arr.iata && board(f.arr.iata, 'arrivals', { from: f.arr.sched - 60, limit: 25, details: false, ...opts }),
   ]);
   const dr = d.status === 'fulfilled' ? near(d.value?.rows, 'dep') : null;
   const ar = a.status === 'fulfilled' ? near(a.value?.rows, 'arr') : null;

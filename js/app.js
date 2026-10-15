@@ -220,7 +220,7 @@ function homeView(iata, mode) {
     const from = nowS() - 45 * 60; // keep the last few departed flights in view
     try {
       results = [];
-      for (let p = 1; p <= pages; p++) results.push(await src.board(iata, mode, { from, page: p, fresh }));
+      for (let p = 1; p <= pages; p++) results.push(await src.board(iata, mode, { from, page: p, limit: 40, details: p === 1, fresh }));
     } catch (e) {
       if (my !== token) return;
       if (!apt) rowsEl.innerHTML = problemHTML(e);
@@ -228,7 +228,7 @@ function homeView(iata, mode) {
       return;
     }
     if (my !== token) return;
-    if (!results[0]) {
+    if (!results[0]?.airport) {
       rowsEl.innerHTML = `<div class="problem"><p><b>No airport found for “${esc(iata)}”.</b></p><p>Check the 3-letter code on your ticket, for example ALC for Alicante or MAN for Manchester.</p></div>`;
       document.getElementById('board-sub').textContent = '';
       return;
@@ -332,10 +332,12 @@ function flightView(number, date, from) {
     const f = pick(flights, date, from);
     render(flights, f);
     remember(f);
-    try {
-      merge(f, await src.gateInfo(f, { fresh }));
-      if (my === token) render(flights, f);
-    } catch { /* gates are a bonus */ }
+    if (Math.abs(f.dep.sched - nowS()) < 36 * 3600) {
+      try {
+        merge(f, await src.gateInfo(f, { fresh }));
+        if (my === token) render(flights, f);
+      } catch { /* gates are a bonus */ }
+    }
     if (my !== token) return;
     later(() => load(true), isFinal(f) ? 15 * 60_000 : FLIGHT_REFRESH);
   };
@@ -345,6 +347,7 @@ function flightView(number, date, from) {
     const scroller = view.querySelector('.days');
     const keep = scroller?.scrollLeft;
     view.innerHTML = flightHTML(flights, f);
+    document.title = `${f.number} · ${statusOf(f).label.replace(/&amp;/g, '&')} · Airside`;
     const days = view.querySelector('.days');
     const on = days?.querySelector('[aria-current]');
     if (days && on) days.scrollLeft = keep ?? on.offsetLeft - days.clientWidth / 2 + on.clientWidth / 2;
@@ -361,10 +364,17 @@ function merge(f, info) {
   f.airline ??= info?.airline ?? null;
 }
 
+// Phones get the system share sheet; elsewhere the link goes to the clipboard.
+const canShare = typeof navigator.share === 'function' && matchMedia('(pointer: coarse)').matches;
+
 view.addEventListener('click', async e => {
   const btn = e.target.closest('#copy');
   if (!btn) return;
   const url = location.href;
+  if (canShare) {
+    try { await navigator.share({ title: document.title, url }); } catch { /* closed the sheet */ }
+    return;
+  }
   try {
     await navigator.clipboard.writeText(url);
     btn.lastChild.textContent = ' Link copied';
@@ -376,16 +386,15 @@ view.addEventListener('click', async e => {
 
 function flightHTML(flights, f) {
   const s = statusOf(f);
-  const sub = [f.airline?.name, f.codeshares.length ? `also sold as ${f.codeshares.join(', ')}` : ''].filter(Boolean);
   return `
     <nav class="crumbs"><a href="?airport=${esc(f.dep.iata)}&board=departures" data-nav>${icon('back')}${esc(f.dep.city || f.dep.iata)} departures</a></nav>
     <header class="fl-head">
       <p class="plate-num">${esc(f.number)}</p>
       <div class="fl-title">
         <h1>${esc(f.dep.city)} to ${esc(f.arr.city)}</h1>
-        <p class="sub">${sub.map(esc).join(' · ')}</p>
+        <p class="sub">${esc(f.airline?.name ?? '')}</p>
       </div>
-      <button class="ghost" id="copy" type="button">${icon('link')}<span> Copy link</span></button>
+      <button class="ghost" id="copy" type="button">${icon('link')}<span> ${canShare ? 'Share' : 'Copy link'}</span></button>
     </header>
     ${daysHTML(flights, f)}
     <section class="status tone-${s.tone}" aria-live="polite">
@@ -401,9 +410,8 @@ function flightHTML(flights, f) {
       </div>
       <div class="ends">${endHTML(f, 'dep')}${endHTML(f, 'arr')}</div>
     </section>
-    ${factsHTML(flights, f)}
-    ${punctualityHTML(flights)}
-    ${historyHTML(flights)}`;
+    ${recordHTML(flights)}
+    ${detailsHTML(flights, f)}`;
 }
 
 function daysHTML(flights, sel) {
@@ -454,35 +462,43 @@ function endHTML(f, side) {
   </div>`;
 }
 
-function factsHTML(flights, f) {
-  const flown = flights.filter(x => x.dep.actual && x.arr.actual);
-  const avg = flown.length ? flown.reduce((t, x) => t + x.arr.actual - x.dep.actual, 0) / flown.length : null;
-  const diff = (offsetMin(f.arr.tz, f.arr.sched) - offsetMin(f.dep.tz, f.dep.sched)) / 60;
-  const tzText = diff === 0 ? 'Same time zone'
-    : `${esc(f.arr.city)} is ${dur(Math.abs(diff) * 3600)} ${diff > 0 ? 'ahead' : 'behind'}`;
-  const ac = [f.aircraft.model || f.aircraft.code, f.aircraft.reg].filter(Boolean).join(' · ');
-  const items = [
-    ['Aircraft', ac ? esc(ac) : 'Not assigned yet'],
-    ['Usual time in the air', avg ? `${dur(avg)} <small>over ${flown.length} flights</small>` : '–'],
-    ['Time difference', tzText],
-  ];
-  return `<dl class="facts">${items.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
-}
+// Secondary information lives in folds. Their open state survives the
+// once-a-minute refresh and is remembered between visits.
+const openFolds = new Set(store.get('folds', []));
+view.addEventListener('toggle', e => {
+  const d = e.target;
+  if (!d.matches?.('details.fold')) return;
+  if (d.open) openFolds.add(d.id); else openFolds.delete(d.id);
+  store.set('folds', [...openFolds]);
+}, true);
 
-function punctualityHTML(flights) {
+const fold = (id, title, hint, body) => `<details class="fold" id="${id}"${openFolds.has(id) ? ' open' : ''}>
+  <summary><span class="fold-title">${title}</span>${hint ? `<span class="fold-hint">${hint}</span>` : ''}</summary>
+  <div class="fold-body">${body}</div>
+</details>`;
+
+function recordHTML(flights) {
   const now = nowS();
   const done = flights.filter(f => (f.state === 'landed' && f.arr.actual) ||
     ((f.state === 'canceled' || f.state === 'diverted') && f.dep.sched < now));
-  if (done.length < 2) return '';
+  const past = flights.filter(f => f.dep.sched < now - 3600 && f.state !== 'scheduled').reverse();
+  if (!past.length) return '';
   const flown = done.filter(f => f.arr.actual);
   const delays = flown.map(f => (f.arr.actual - f.arr.sched) / 60);
   const onTime = delays.filter(d => d < LATE / 60).length;
-  const lost = done.length - flown.length;
-  const avgLate = delays.length ? Math.round(delays.reduce((t, d) => t + Math.max(0, d), 0) / delays.length) : 0;
   const sorted = [...delays].sort((a, b) => a - b);
   const median = sorted.length ? Math.round(sorted[Math.floor(sorted.length / 2)]) : 0;
-  const pct = Math.round(onTime / done.length * 100);
+  const pct = done.length ? Math.round(onTime / done.length * 100) : null;
+  const usually = median > 0 ? `usually ${median} min late` : median < 0 ? `usually ${-median} min early` : 'usually on schedule';
+  const hint = done.length >= 2 ? `${pct}% on time · ${usually}` : `${past.length} recent flight${past.length > 1 ? 's' : ''}`;
+  return fold('record', 'Punctuality', hint, `${done.length >= 2 ? chartHTML(done, delays, onTime, median, pct) : ''}
+    <h3>Recent flights</h3>
+    ${historyHTML(flights, past)}`);
+}
 
+function chartHTML(done, delays, onTime, median, pct) {
+  const lost = done.length - delays.length;
+  const avgLate = delays.length ? Math.round(delays.reduce((t, d) => t + Math.max(0, d), 0) / delays.length) : 0;
   const top = Math.max(30, Math.ceil(Math.max(0, ...delays) / 15) * 15);
   const bottom = Math.max(15, Math.ceil(Math.max(0, ...delays.map(d => -d)) / 15) * 15);
   const span = top + bottom;
@@ -492,18 +508,14 @@ function punctualityHTML(flights) {
       return `<div class="col"><span class="x" style="top:${y(0)}%">×</span><span class="lbl down" style="top:${y(0)}%">${f.state === 'canceled' ? 'Cncl' : 'Div'}</span></div>`;
     }
     const d = Math.round((f.arr.actual - f.arr.sched) / 60);
-    const t = toneOf(d * 60);
     const hi = Math.max(d, 0), lo = Math.min(d, 0);
     const label = d > 0 ? `+${d}` : d < 0 ? `−${-d}` : '0';
     return `<div class="col" title="${shortDay(f.dep.sched, f.dep.tz)}: ${lateness(d * 60)}">
-      <span class="bar tone-${t}" style="top:${y(hi)}%;height:${Math.max(0.8, (hi - lo) / span * 100).toFixed(2)}%"></span>
+      <span class="bar tone-${toneOf(d * 60)}" style="top:${y(hi)}%;height:${Math.max(0.8, (hi - lo) / span * 100).toFixed(2)}%"></span>
       <span class="lbl ${d >= 0 ? 'up' : 'down'}" style="top:${y(d >= 0 ? hi : lo)}%">${label}</span>
     </div>`;
   }).join('');
-
-  return `<section class="block" aria-labelledby="punct">
-    <h2 id="punct">Punctuality</h2>
-    <div class="stats">
+  return `<div class="stats">
       <p><b>${pct}%</b><span>on time, ${onTime} of ${done.length}</span></p>
       <p><b>${median > 0 ? '+' : median < 0 ? '−' : ''}${Math.abs(median)} min</b><span>typical arrival</span></p>
       <p><b>${avgLate} min</b><span>average delay</span></p>
@@ -517,17 +529,11 @@ function punctualityHTML(flights) {
       </div>
       <div class="chart-days">${done.map(f => `<span>${shortDay(f.dep.sched, f.dep.tz).replace(' ', '<br>')}</span>`).join('')}</div>
       <figcaption>Minutes early or late at arrival. A flight counts as on time if it lands less than 15 minutes after schedule.</figcaption>
-    </figure>
-  </section>`;
+    </figure>`;
 }
 
-function historyHTML(flights) {
-  const now = nowS();
-  const past = flights.filter(f => f.dep.sched < now - 3600 && f.state !== 'scheduled').reverse();
-  if (!past.length) return '';
-  return `<section class="block" aria-labelledby="hist">
-    <h2 id="hist">Recent flights</h2>
-    <div class="table-wrap"><table class="hist">
+function historyHTML(flights, past) {
+  return `<div class="table-wrap"><table class="hist">
       <thead><tr><th scope="col">Date</th><th scope="col">Departed</th><th scope="col">Landed</th><th scope="col" class="opt">In the air</th><th scope="col" class="opt">Aircraft</th><th scope="col">Arrival</th></tr></thead>
       <tbody>${past.map(f => {
         const s = statusOf(f);
@@ -541,8 +547,31 @@ function historyHTML(flights) {
           <td><span class="pill tone-${s.tone}">${d != null ? esc(lateness(d)) : esc(s.label)}</span></td>
         </tr>`;
       }).join('')}</tbody>
-    </table></div>
-  </section>`;
+    </table></div>`;
+}
+
+function detailsHTML(flights, f) {
+  const flown = flights.filter(x => x.dep.actual && x.arr.actual);
+  const avg = flown.length ? flown.reduce((t, x) => t + x.arr.actual - x.dep.actual, 0) / flown.length : null;
+  const diff = (offsetMin(f.arr.tz, f.arr.sched) - offsetMin(f.dep.tz, f.dep.sched)) / 60;
+  const km = distanceKm(f.dep, f.arr);
+  const model = f.aircraft.model || f.aircraft.code;
+  const codes = a => [a.iata, a.icao].filter(Boolean).map(esc).join(' · ');
+  const rows = [
+    ['Aircraft', model ? `${esc(model)}${f.aircraft.model && f.aircraft.code ? ` <small>${esc(f.aircraft.code)}</small>` : ''}` : 'Not assigned yet'],
+    ['Registration', f.aircraft.reg ? esc(f.aircraft.reg) : 'Not assigned yet'],
+    f.callsign && ['Callsign', esc(f.callsign)],
+    f.codeshares.length && ['Also sold as', esc(f.codeshares.join(', '))],
+    ['From', `${esc(f.dep.name)} <small>${codes(f.dep)}</small>`],
+    ['To', `${esc(f.arr.name)} <small>${codes(f.arr)}</small>`],
+    km && ['Distance', `${num(km)} km <small>${num(Math.round(km / 1.852))} nm direct</small>`],
+    ['Scheduled gate to gate', dur(f.arr.sched - f.dep.sched)],
+    avg && ['Usual time in the air', `${dur(avg)} <small>over ${flown.length} flights</small>`],
+    ['Time difference', diff === 0 ? 'Same time zone' : `${esc(f.arr.city)} is ${dur(Math.abs(diff) * 3600)} ${diff > 0 ? 'ahead' : 'behind'}`],
+  ].filter(Boolean);
+  const hint = [model, f.aircraft.reg].filter(Boolean).map(esc).join(' · ');
+  return fold('details', 'Flight details', hint, `<dl class="kv">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+    <p class="source">Live data from Flightradar24, last checked at ${viewerTime()}.</p>`);
 }
 
 route();

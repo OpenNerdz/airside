@@ -28,8 +28,15 @@ for (const name of shots) {
   page.on('pageerror', e => errors.push(String(e)));
   const url = page_ === 'flight' ? `${base}?flight=${process.env.FLIGHT ?? 'FR2660'}`
     : `${base}?airport=${process.env.AIRPORT ?? 'ALC'}&board=${process.env.BOARD ?? 'departures'}`;
+  const reqs = [];
+  page.on('requestfinished', async r => reqs.push({ url: r.url(), bytes: (await r.sizes()).responseBodySize }));
   await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
+  if (process.env.OPEN) for (const s of await page.$$('details.fold > summary')) await s.click();
   await page.waitForTimeout(800);
+  const own = reqs.filter(r => !r.url.includes('flightradar24'));
+  const feed = reqs.filter(r => r.url.includes('flightradar24'));
+  const kb = list => (list.reduce((t, r) => t + r.bytes, 0) / 1024).toFixed(1);
+  console.log(`${name}: site ${own.length} requests ${kb(own)} KB, feed ${feed.length} requests ${kb(feed)} KB (as transferred)`);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   await page.screenshot({ path: `${out}${process.env.TAG ?? ''}${name}.png`, fullPage: true });
   console.log(name, 'overflow', overflow, errors.length ? 'ERRORS ' + errors.join(' | ') : 'no errors');

@@ -3,7 +3,16 @@
 Live flight status and airport boards, without ads, trackers or a framework.
 Live at https://opennerdz.github.io/airside/ (GitHub Pages, deployed from `main`).
 
-Plain HTML, CSS and ES modules: about 60 KB uncompressed before fonts, no build step.
+Plain HTML, CSS and ES modules with no build step. A flight page costs about 60 KB of site
+files on first visit (roughly 45 KB of that is fonts, cached afterwards) plus about 20 KB of live
+data. There are no third-party requests other than the data feed.
+
+- Fonts are self-hosted and subset to Latin-1 (Atkinson Hyperlegible Next as one variable file
+  limited to weights 400–700, Barlow Semi Condensed 600 and 700). Licences are in `fonts/`.
+- The flight page shows status, times and gates up front. Punctuality, recent flights and full
+  flight details sit in folds that remember whether you left them open.
+- Gate lookups are skipped for flights more than 36 hours away, because boards don't carry them.
+- Installable to the home screen (`manifest.webmanifest`); no service worker.
 
 - `?flight=FR2660` shows one flight: live status, gate, terminal, check-in and belt,
   progress while airborne, every known day for that number, punctuality chart and recent history.
